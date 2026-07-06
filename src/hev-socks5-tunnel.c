@@ -60,6 +60,8 @@ static size_t stat_tx_packets;
 static size_t stat_rx_packets;
 static size_t stat_tx_bytes;
 static size_t stat_rx_bytes;
+static size_t trace_tx_packets;
+static size_t trace_rx_packets;
 
 static struct netif *netif;
 static struct tcp_pcb *tcp;
@@ -70,6 +72,53 @@ static HevTask *task_event;
 static HevTask *task_lwip_io;
 static HevTask *task_lwip_timer;
 static HevList session_set;
+
+static void
+trace_ip_packet (const char *direction, struct pbuf *p, size_t packet_index)
+{
+    const uint8_t *payload;
+    size_t len;
+    uint8_t version;
+
+    if (packet_index > 64 || !p || !p->payload || p->len < 1)
+        return;
+
+    payload = p->payload;
+    len = p->len;
+    version = (payload[0] >> 4) & 0x0F;
+
+    if ((version == 4) && (len >= 20)) {
+        char src[16];
+        char dst[16];
+        uint8_t proto = payload[9];
+        uint16_t src_port = 0;
+        uint16_t dst_port = 0;
+        uint8_t ihl = (payload[0] & 0x0F) * 4;
+
+        snprintf (src, sizeof (src), "%u.%u.%u.%u", payload[12],
+                  payload[13], payload[14], payload[15]);
+        snprintf (dst, sizeof (dst), "%u.%u.%u.%u", payload[16],
+                  payload[17], payload[18], payload[19]);
+        if ((proto == 6 || proto == 17) && len >= (size_t)ihl + 4) {
+            src_port = ((uint16_t)payload[ihl] << 8) | payload[ihl + 1];
+            dst_port = ((uint16_t)payload[ihl + 2] << 8) | payload[ihl + 3];
+        }
+        LOG_I ("tun %s #%zu ipv4 proto=%u %s:%u -> %s:%u len=%zu tot=%u",
+               direction, packet_index, proto, src, src_port, dst, dst_port,
+               len, p->tot_len);
+        return;
+    }
+
+    if ((version == 6) && (len >= 40)) {
+        uint8_t next = payload[6];
+        LOG_I ("tun %s #%zu ipv6 next=%u len=%zu tot=%u", direction,
+               packet_index, next, len, p->tot_len);
+        return;
+    }
+
+    LOG_I ("tun %s #%zu unknown version=%u len=%zu tot=%u first=%02x",
+           direction, packet_index, version, len, p->tot_len, payload[0]);
+}
 
 static int
 task_io_yielder (HevTaskYieldType type, void *data)
@@ -94,6 +143,8 @@ netif_output_handler (struct netif *netif, struct pbuf *p)
 
     stat_rx_packets++;
     stat_rx_bytes += s;
+    trace_rx_packets++;
+    trace_ip_packet ("write", p, trace_rx_packets);
 
     return ERR_OK;
 }
@@ -325,6 +376,8 @@ lwip_io_task_entry (void *data)
 
         stat_tx_packets++;
         stat_tx_bytes += buf->tot_len;
+        trace_tx_packets++;
+        trace_ip_packet ("read", buf, trace_tx_packets);
 
         hev_task_mutex_lock (&mutex);
         if (netif->input (buf, netif) != ERR_OK)
