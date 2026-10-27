@@ -9,4 +9,5 @@
 	url = https://github.com/heiher/lwip
 [submodule "src/core"]
 	path = src/core
-	url = https://github.com/heiher/hev-socks5-core
+	url = https://github.com/TimaFeyka/hev-socks5-core.git
+	branch = codex/ios-loopback-socks
